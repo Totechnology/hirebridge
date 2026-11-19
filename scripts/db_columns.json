@@ -1,0 +1,15 @@
+{
+"hb_app_meta": {"cols": "id,owner_id,meta_key,meta_value,created_at"},
+"hb_candidates": {"cols": "id,owner_id,owner_name,job_id,name,role_title,department,phone,email,location,stage,score,band,summary,source,resume_path,evaluation,attachments,interview_at,horilla_employee_id,created_at,updated_at,person_id,person_no,resume_raw,composite_score,composite_complete,composite_detail,survey_status,expected_salary,available_at,channel,reason_detail"},
+"hb_employees": {"cols": "id,owner_id,owner_name,candidate_id,employee_no,first_name,last_name,email,phone,department,role_title,employment_type,status,source,horilla_employee_id,id_number,hire_date,base_salary,social_insurance_base,social_insurance_amount,medical_insurance_amount,housing_fund,contract_expiry,attachments,created_at,updated_at"},
+"hb_events": {"cols": "id,owner_id,owner_name,candidate_id,event_type,title,detail,metadata,created_at"},
+"hb_funnel_events": {"cols": "id,owner_id,candidate_id,job_id,project_id,stage,channel,event_at"},
+"hb_jobs": {"cols": "id,owner_id,owner_name,title,department,location,employment_type,openings,status,rubric,created_at,jd_text,jd_file,rubric_source,jd_updated_at,rubric_notes,project_id,project_name,recruit_reasons,market_type,market_score,salary_budget,reason_rules,rule_version,survey_version_id,reason_notes,need_by,updated_at,company_name"},
+"hb_messages": {"cols": "id,owner_id,owner_name,category,level,title,body,link_view,link_kind,link_id,read_at,created_at,dedupe_key"},
+"hb_persons": {"cols": "id,owner_id,person_no,name,phone_normalized,phone,wechat_user_id,created_at"},
+"hb_projects": {"cols": "id,owner_id,name,description,created_at"},
+"hb_scoring_history": {"cols": "id,owner_id,candidate_id,job_id,version,reason_raw,market_raw,resume_raw,survey_raw,composite_score,complete,detail,rule_version,model_version,calculated_at"},
+"hb_survey_invites": {"cols": "id,owner_id,token,job_id,candidate_id,survey_id,channel,status,created_at,expires_at,used_at,used_by"},
+"hb_survey_responses": {"cols": "id,survey_id,owner_id,employee_no,employee_name,respondent_id,answers,score,detail,submitted_at,invite_id,person_id,candidate_id,survey_version,rule_version,phone_verified,wechat_user_id"},
+"hb_surveys": {"cols": "id,owner_id,owner_name,job_id,title,description,status,questions,pass_score,created_at,updated_at,version,is_current,base_survey_id,business_type"}
+}
