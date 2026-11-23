@@ -1,12 +1,14 @@
 # 聘桥 HireBridge
 
+版本：v0.1.3 · [部署与迁移说明](DEPLOYMENT.md)
+
 一套招聘工作流管理系统：岗位上架、简历解析与 AI 证据评估、一人一码测评问卷、候选人管道、面试记录、综合评分与招聘漏斗。
 
 - 前端：React 19 + Vite 7（纯浏览器应用，**无自建 Node 服务端**）
 - 后端：WorkBuddy Cloud 托管服务（PostgreSQL + RLS + Storage + LLM），对标 Supabase
 - 数据/计分边界：身份关联、问卷计分、综合加权、防重复等可信计算下沉在数据库 `SECURITY DEFINER` 函数中；前端只展示结果，不算分、不做决策
 
-> ⚠️ **许可声明**：本项目自有代码**禁止用于商业用途**，仅限个人学习与内部非商业试用。详见文末 [许可与商用限制](#许可与商用限制)。项目公开提供源代码并保留非商业用途限制。引用的第三方开源组件遵循各自许可证。
+> ⚠️ **许可声明**：本项目自有代码**禁止用于商业用途**，仅限个人学习与内部非商业试用。详见文末 [许可与商用限制](#许可与商用限制)。引用的第三方开源组件遵循各自许可证。
 
 ---
 
@@ -32,13 +34,13 @@
 | --- | --- |
 | 招聘工作流 | 总览待办与流程快捷入口 |
 | 测评问卷 | 单选/多选/量表/开放题，题目权重，版本化，绑定岗位，一人一码，回收结果；8 道档案题不计分但自动回填台账 |
-| 上架岗位 | JD 上传/粘贴，LLM 生成评分维度（人工确认），招聘原因/市场类型仅记录不打分，薪资预算 |
+| 上架岗位 | JD 上传/粘贴，LLM 生成评分维度（人工确认），招聘原因/市场类型仅记录不打分，薪资预算，按岗位授权协作 |
 | 人员管理 | 台账主表，筛选/搜索/排序，改岗位，勾选导出（按项目分 sheet），孤儿简历清理 |
 | 候选人管道 | 四阶段看板（简历筛选→面试中→Offer→已入职），线性推进与逐格回撤，卡片可直接登记面试 |
 | 面试安排 | 一面/二面面试记录表：接受、参面、时间、形式、结果、备注；拒绝标红；按轮次或整人删除 |
 | 数据漏斗 | 各环节转化与跳步识别，基于真实事件时间戳 |
 | 人才评分 | 按 JD 维度排名与导出 |
-| 简历导入 | 单份 AI 评估、批量并行解析（PDF/DOC/DOCX/TXT/MD/CSV/Excel）、原件归档 |
+| 简历导入 | 单份 AI 评估、批量并行解析（PDF/DOC/DOCX/TXT/MD/CSV/Excel）、扫描件 PDF OCR、原件归档 |
 | 用户中心 | 个人资料、管理员只读模式、账号切换、存储清理 |
 
 **评分口径**：`综合分 = AI 评估 × 0.50 + 问卷 × 0.50`，满分 100、保留 1 位小数，不设及格线。招聘原因、市场类型不参与评分（市场分由触发器固定：人的市场=7、岗位的市场=3）。
@@ -56,7 +58,7 @@ npm run preview   # 预览构建产物
 npm run check:cols # 校验本地代码引用的列与云库结构一致（需脚本配套）
 ```
 
-**本地预览是演示模式**：未配置云端或未登录时，使用 `src/data.js` 中的虚构样例，不写云端。配置并登录后使用自己的 WorkBuddy Cloud 环境。公开版本中的导入清单和种子数据为空。
+**本地预览是演示模式**：未配置云端或未登录时，使用 `src/data.js` 中的演示数据，不写云端。配置并登录后使用自己的 WorkBuddy Cloud 环境。公开版本中的导入清单和种子数据为空。
 
 > 注意：应用依赖云端数据库与登录，**不能只靠 `npm run dev` 完整跑通**。首次接入新环境需按下方 [数据库](#数据库) 与 [配置](#配置) 完成初始化。
 
@@ -75,12 +77,16 @@ src/
 └── styles.css           样式
 scripts/
 ├── 00_schema.sql        参考 DDL：新增表 + RLS + 授权
+├── 01_interviews.sql    面试记录表 hb_interviews + RLS
+├── 02_collaboration.sql 岗位协作授权 hb_job_shares + RLS + 协作函数/触发器
 ├── fn_01_score.sql      问卷客观分 hb_score_survey_answers
 ├── fn_02_fill.sql       C 端取题面 hb_get_survey_for_fill（剥离答案与分值）
 ├── fn_03_submit.sql     提交+身份核验+防重复+计分 hb_submit_survey
 ├── fn_04_composite.sql  综合分 hb_compute_composite
 ├── fn_05_funnel.sql     漏斗记录 hb_record_funnel
 ├── fn_06_delete_candidate.sql  级联删除 hb_delete_candidate
+├── fn_07_reset_survey.sql  刷新问卷 hb_reset_candidate_survey（含 schema cache 刷新）
+├── fn_08_profile_backfill.sql  档案题 pf_* 回填台账 hb_apply_survey_profile（含存量补写）
 └── check_db_columns.py  列一致性检查
 docs/
 └── 聘桥HireBridge-使用说明书.md
@@ -114,20 +120,24 @@ docs/
 | `hb_messages` | 通知消息 |
 | `hb_employees` | 云聘员工档案（可选集成） |
 | `hb_admins` | 管理员名单（管理员只读的数据边界） |
+| `hb_job_shares` | 岗位协作授权（候选人和面试记录可按权限协作） |
 | `hb_display_names` | 显示名/录入人 |
-| `hb_team_members` | 团队成员（历史遗留，当前按账号隔离，不做团队共享） |
+| `hb_team_members` | 团队成员（历史遗留，当前按账号隔离，岗位协作另由 `hb_job_shares` 授权） |
 | `hb_app_meta` | 初始化标记（防止岗位删光后重新播种） |
 
 ### 建表与迁移
 
-`scripts/00_schema.sql` 是**参考 DDL**（新增表 + RLS + 授权），仅供新环境重建/审计/回滚参考；部分 SQL 依赖 WorkBuddy Cloud 环境中已有的基础表、认证函数和角色。执行顺序：
+`scripts/00_schema.sql` 是**参考 DDL**（新增表 + RLS + 授权），仅供新环境重建/审计/回滚参考；部分脚本依赖 WorkBuddy Cloud 环境中已有的基础表、认证函数和角色。执行顺序：
 
 ```
 00_schema.sql → 01_interviews.sql → fn_01_score.sql → fn_02_fill.sql → fn_03_submit.sql
               → fn_04_composite.sql → fn_05_funnel.sql → fn_06_delete_candidate.sql
+              → fn_07_reset_survey.sql → fn_08_profile_backfill.sql → 02_collaboration.sql
 ```
 
-> `01_interviews.sql` 是迭代中新增的面试记录表，单独成脚本（未并入 `00_schema.sql`），两者都要执行。
+> `01_interviews.sql`、`02_collaboration.sql` 是迭代中新增的表，单独成脚本（未并入 `00_schema.sql`），都要执行。
+> 新增 RPC 函数后必须执行 `NOTIFY pgrst, 'reload schema'`，否则前端调用会报
+> "Could not find the function ... in the schema cache"（`fn_07_reset_survey.sql` 末尾已含）。
 
 面试表 `hb_interviews` 的建表范式（RLS：owner 全权、管理员只读，完整可执行版见 `scripts/01_interviews.sql`）：
 
@@ -159,8 +169,8 @@ CREATE POLICY owner_hb_interviews ON hb_interviews FOR ALL
 
 ### 设计红线
 
-1. **不做旧数据迁移**：存量记录由人工逐条修正，新规则只作用于新增数据。
-2. **按账号严格隔离**：A 账号只能看到 A 的数据；不做团队共享。`hb_admins` 表的管理员是**只读**角色，界面根据登录账号的管理员资格开放入口。
+1. **不做旧数据迁移**：评分规则默认不重算历史分；`fn_08_profile_backfill.sql` 另有存量档案回填步骤。
+2. **按账号严格隔离**：账号默认访问自己的数据；管理员可以按岗位授予协作，权限由数据库策略限制。管理员查看全员业务数据时为**只读**。
 3. 前端不算分、不传 `owner_id`、不做身份合并、不设及格线、不自动淘汰。
 4. 不新增性别/年龄/婚育/民族字段，也不基于这些做筛选或计算。
 
@@ -253,21 +263,21 @@ for await (const chunk of cloud.llm.chat.completions.create({
 - **登录**：WorkBuddy 账号 OAuth，`signIn()` 经 `oauthRelayBaseUrl` 跳转授权；`restoreSession()` 恢复会话。
 - **身份**：数据库以 `auth.uid()` 作为 `owner_id`；所有业务表默认 `owner_id TEXT NOT NULL DEFAULT auth.uid()`。
 - **RLS**：每表策略形如 `USING (owner_id = auth.uid()) WITH CHECK (owner_id = auth.uid())`；管理员通过 `hb_is_admin()` 获得 SELECT 只读。
-- **管理员**：进入管理员模式需在 `hb_admins` 登记登录账号，数据权限由数据库策略决定。
+- **管理员**：登录后由 `hb_admins` 和数据库策略识别管理员，无需输入单独的管理密码。
 - **C 端问卷**：凭 token 匿名作答，无需登录；身份靠姓名或手机号任一吻合放行，都不符返回 `identity_mismatch`；手机号标注「未验证」（暂未接短信）。
 
 ---
 
 ## 配置
 
-将 `.env.example` 复制为 `.env.local`，填入自己的 WorkBuddy Cloud 应用配置，再重启开发服务或重新构建：
+将 `.env.example` 复制为 `.env.local`，填入自己的 WorkBuddy Cloud 应用配置，然后重启开发服务或重新构建：
 
 ```dotenv
 VITE_WORKBUDDY_ENDPOINT=https://<你的应用>.app.workbuddy.host
 VITE_WORKBUDDY_PUBLISHABLE_KEY=<你的应用的公开客户端标识>
 ```
 
-如果需要自定义 OAuth 中继地址，设置 `VITE_WORKBUDDY_OAUTH_RELAY_BASE_URL`。
+需要自定义 OAuth 中继地址时，设置 `VITE_WORKBUDDY_OAUTH_RELAY_BASE_URL`。
 
 > `endpoint` 必须与应用保留域名完全一致，OAuth 做 Origin 精确匹配，对不上会导致登录失败。`publishableKey` 是公开客户端标识，不是密钥。
 
@@ -332,4 +342,4 @@ npm run build  # Vite 生产构建
 
 ---
 
-*文档版本：2026-11-19*
+*文档版本：v0.1.3*

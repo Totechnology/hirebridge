@@ -9,8 +9,17 @@ DECLARE
 BEGIN
   SELECT * INTO c FROM hb_candidates WHERE id = p_candidate_id;
   IF c.id IS NULL THEN RETURN; END IF;
+  -- P0：外部调用必须是候选人本人或管理员，或来自已核验 token 的内部可信调用
+  IF coalesce(current_setting('hb.trusted_candidate', true), '') <> p_candidate_id::text
+     AND c.owner_id IS DISTINCT FROM auth.uid()
+     AND NOT hb_is_admin() THEN
+    RAISE EXCEPTION 'no permission to record funnel for this candidate';
+  END IF;
   INSERT INTO hb_funnel_events (owner_id, candidate_id, job_id, project_id, stage, channel, event_at)
   VALUES (c.owner_id, c.id, c.job_id, (SELECT project_id FROM hb_jobs WHERE id = c.job_id), p_stage, p_channel, now())
   ON CONFLICT (candidate_id, stage) DO NOTHING;
 END;
 $$;
+
+REVOKE EXECUTE ON FUNCTION hb_record_funnel(bigint, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION hb_record_funnel(bigint, text, text) TO authenticated;

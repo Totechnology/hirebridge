@@ -6,7 +6,7 @@ import {
   CalendarDays, CalendarPlus, Check, CheckCheck, CheckCircle2, ChevronDown, ChevronRight,
   Circle, ClipboardCopy, ClipboardList, Clock3, Copy, Database, Download, FileText, Filter, GitBranch, IdCard, Inbox,
   Link2, Layers, ListChecks, LoaderCircle, LockKeyhole, LogOut, MapPin, Menu, MessageSquare, MoreHorizontal,
-  PanelRightClose, Pencil, PlugZap, Plus, RefreshCw, Search, Send, Settings2,
+  PanelRightClose, Pencil, PlugZap, Plus, RefreshCw, Search, Send, Settings2, Table2,
   ShieldCheck, SlidersHorizontal, Sparkles, Trash2, Undo2, UploadCloud, UserCheck, UserPlus, UserRound, UsersRound, Wallet, X,
 } from 'lucide-react'
 import { stages } from './data.js'
@@ -15,10 +15,11 @@ import {
   candidateDimensions, checkIntegration, clearHorilla, computeComposite, configureHorilla,
   createProject, bindCandidateSurvey, deleteCandidate, deleteJob, deleteMessage, deleteSurvey, deriveRubricFromJd,
   displayError, downloadCandidateAttachment, downloadEmployeeAttachment, ensureCandidateInvite, evaluateCandidateResume, evaluateResume,
-  exportCandidateRankingXlsx, exportEmployeesXlsx, exportLedgerByProjectXlsx, exportLedgerXlsx, exportSurveyResponsesXlsx,
+  exportCandidateRankingXlsx, exportEmployeesXlsx, exportLedgerByProjectXlsx, exportLedgerXlsx, exportSurveyResponsesXlsx, ledgerSurveyData,
   extractJobFileText, extractResumeProfile, fetchCandidateSurveyResponses, fetchEmployees, fetchFunnel, fetchInvites, fetchMessages, fetchPersons,
   fetchScoringHistory, fetchSurveyResponses, fetchSurveys, getJdUrl, getResumeUrl, getSurveyForFill, jobCurrentSurvey,
   fetchMyProfile, saveMyProfile, fetchAdminStatus, fetchDisplayNames, ensureDisplayName, scanOrphanResumes, purgeOrphanResumes,
+  fetchJobShares, createJobShare, deleteJobShare,
   importResumeFiles, inviteUrl, loadWorkspace, MARKET_TYPES, markMessageRead, markMessagesRead, moveCandidate,
   planResumeImport, rankCandidates, PROFILE_QUESTIONS, RECRUIT_REASONS, recordFunnel, removeEmployeeAttachment, restoreSession,
   saveJobFull, saveJobJd, saveSurveyVersioned, signIn, parseResumeContacts, updateCandidateProfile, updateCandidateJob, revokeCandidateInvites, bindSurveyToJob, resetCandidateSurvey,
@@ -40,9 +41,10 @@ const primaryNav = [
 ]
 
 const secondaryNav = [
+  { id: 'ledger', label: '在线台账', icon: Table2 },
+  { id: 'batch', label: '批量简历导入', icon: Layers },
   { id: 'messages', label: '消息', icon: MessageSquare },
   { id: 'integration', label: '云聘集成', icon: PlugZap },
-  { id: 'batch', label: '批量简历导入', icon: Layers },
   { id: 'account', label: '用户中心', icon: UserRound },
 ]
 
@@ -89,6 +91,7 @@ const viewTitles = {
   messages: '消息中心',
   integration: '云聘人事',
   batch: '批量简历导入',
+  ledger: '在线台账',
   account: '用户中心',
 }
 
@@ -102,7 +105,7 @@ const AVAILABLE_VIEWS = new Set([
 // 常驻挂载的视图顺序。所有视图同时渲染、非当前视图用 hidden 隐藏（不卸载），
 // 切换栏目时组件内部状态（批量导入队列、表单草稿、筛选条件、滚动位置）全部保留，
 // 切回来可以继续接着改。
-const VIEW_KEYS = ['dashboard', 'jobs', 'surveys', 'people', 'pipeline', 'interviews', 'funnel', 'messages', 'integration', 'batch', 'account']
+const VIEW_KEYS = ['dashboard', 'jobs', 'surveys', 'people', 'pipeline', 'interviews', 'funnel', 'messages', 'integration', 'batch', 'ledger', 'account']
 
 
 // 二维码统一低饱和墨色配置（与 styles.css 纸张/墨色令牌一致）
@@ -713,6 +716,180 @@ function InterviewRoundCell({ record, onEdit, onDelete, readOnly }) {
   )
 }
 
+// ── 在线台账：类 Excel 的可编辑表格，单元格即改即存 ──
+// 列分组：基础档案(profile) / 阶段岗位(flow) / 面试记录(interview) / 评分与问卷(score, 只读)
+const LEDGER_GROUPS = [
+  { id: 'all', label: '全部列' },
+  { id: 'profile', label: '基础档案' },
+  { id: 'flow', label: '阶段岗位' },
+  { id: 'interview', label: '面试记录' },
+  { id: 'score', label: '评分与问卷' },
+]
+const LEDGER_PROFILE_COLS = [
+  { key: 'name', label: '姓名', kind: 'profile', field: 'name' },
+  { key: 'phone', label: '电话', kind: 'profile', field: 'phone' },
+  { key: 'id_number', label: '身份证号码', kind: 'profile', field: 'id_number' },
+  { key: 'gender', label: '性别', kind: 'profile', field: 'gender' },
+  { key: 'age', label: '年龄', kind: 'profile', field: 'age', type: 'number' },
+  { key: 'education', label: '学历', kind: 'profile', field: 'education' },
+  { key: 'school', label: '毕业院校', kind: 'profile', field: 'school' },
+  { key: 'major', label: '专业', kind: 'profile', field: 'major' },
+  { key: 'skill_certs', label: '技能/证书', kind: 'profile', field: 'skill_certs' },
+  { key: 'career_plan', label: '职业规划', kind: 'profile', field: 'career_plan' },
+  { key: 'leave_reason', label: '离职原因', kind: 'profile', field: 'leave_reason' },
+  { key: 'expected_salary_note', label: '期望薪资', kind: 'profile', field: 'expected_salary_note' },
+  { key: 'current_salary', label: '目前薪资', kind: 'profile', field: 'current_salary' },
+  { key: 'available_note', label: '可入职时间', kind: 'profile', field: 'available_note' },
+  { key: 'current_city', label: '目前居住地', kind: 'profile', field: 'current_city' },
+  { key: 'acceptable_regions', label: '可接受区域', kind: 'profile', field: 'acceptable_regions' },
+  { key: 'target_cities', label: '意向城市', kind: 'profile', field: 'target_cities' },
+  { key: 'consent_archive', label: '同意留档', kind: 'profile', field: 'consent_archive' },
+]
+
+function LedgerView({ candidates, jobs, surveys, responses, recordsById, session, adminMode, onSave, onOpen, onLogin, notify, onExport }) {
+  const [query, setQuery] = useState('')
+  const [activeGroup, setActiveGroup] = useState('all')
+  const [editing, setEditing] = useState(null) // { candidate, col, orig }
+  const [draft, setDraft] = useState('')
+
+  const { columns: surveyColumns, answersByCandidate } = useMemo(() => ledgerSurveyData(responses, surveys), [responses, surveys])
+
+  const columns = useMemo(() => {
+    const flow = [
+      { key: 'stage', label: '阶段', kind: 'stage', type: 'select', options: stages.map((s) => ({ value: s.id, label: s.label })), group: 'flow' },
+      { key: 'job', label: '岗位', kind: 'job', type: 'select', options: jobs.map((j) => ({ value: String(j.id), label: j.title })), group: 'flow' },
+    ]
+    const interview = []
+    for (const round of INTERVIEW_ROUNDS) {
+      interview.push({ key: `${round}-accepted`, label: `${round}·接受`, kind: 'interview', round, field: 'accepted', type: 'select', options: INTERVIEW_ACCEPTED, group: 'interview' })
+      interview.push({ key: `${round}-attended`, label: `${round}·参面`, kind: 'interview', round, field: 'attended', type: 'select', options: INTERVIEW_ATTENDED, group: 'interview' })
+      interview.push({ key: `${round}-at`, label: `${round}·时间`, kind: 'interview', round, field: 'interview_at', type: 'datetime-local', group: 'interview' })
+      interview.push({ key: `${round}-format`, label: `${round}·形式`, kind: 'interview', round, field: 'format', type: 'select', options: INTERVIEW_FORMATS, group: 'interview' })
+      interview.push({ key: `${round}-result`, label: `${round}·结果`, kind: 'interview', round, field: 'result', type: 'select', options: INTERVIEW_RESULTS, group: 'interview' })
+    }
+    const readonly = [
+      { key: 'band', label: '档位', kind: 'readonly', group: 'score', get: (c) => c.band || '' },
+      { key: 'composite', label: '综合分', kind: 'readonly', group: 'score', get: (c) => c.composite_score ?? '' },
+      { key: 'resumeState', label: '简历状态', kind: 'readonly', group: 'score', get: (c) => c.resume_raw != null ? '已评估' : '未评估' },
+      { key: 'surveyState', label: '问卷状态', kind: 'readonly', group: 'score', get: (c) => c.survey_status === 'submitted' ? '已填写' : c.survey_status === 'invited' ? '已邀请' : '未填写' },
+      { key: 'summary', label: '匹配评价', kind: 'readonly', group: 'score', get: (c) => c.summary || '' },
+      { key: 'personality', label: '性格特征', kind: 'readonly', group: 'score', get: (c) => c.evaluation?.personality || '' },
+      { key: 'owner', label: '负责人', kind: 'readonly', group: 'score', get: (c) => c.owner_name || '' },
+      ...surveyColumns.map((title) => ({ key: `sv-${title}`, label: `问卷·${title}`, kind: 'readonly', group: 'score', get: (c) => answersByCandidate.get(String(c.id))?.[title] || '' })),
+    ]
+    return [
+      ...LEDGER_PROFILE_COLS.map((c) => ({ ...c, group: 'profile' })),
+      ...flow,
+      ...interview,
+      ...readonly,
+    ]
+  }, [jobs, surveyColumns, answersByCandidate])
+
+  const shown = columns.filter((col) => activeGroup === 'all' || col.group === activeGroup)
+  const people = candidates.filter((c) => {
+    const q = query.trim().toLowerCase()
+    if (!q) return true
+    return [c.name, c.phone, c.role_title, c.id_number].some((v) => String(v || '').toLowerCase().includes(q))
+  })
+
+  const recordOf = (id, round) => (recordsById.get(String(id)) || []).find((r) => r.round === round)
+  const readValue = (c, col) => {
+    if (col.kind === 'profile') {
+      if (col.field === 'expected_salary_note') return c.expected_salary_note || (c.expected_salary != null ? String(c.expected_salary) : '')
+      if (col.field === 'current_city') return c.current_city || c.location || ''
+      return c[col.field] ?? ''
+    }
+    if (col.kind === 'interview') {
+      const v = recordOf(c.id, col.round)?.[col.field]
+      if (col.field === 'interview_at') return v ? String(v).slice(0, 16) : ''
+      return v ?? ''
+    }
+    if (col.kind === 'stage') return c.stage || ''
+    if (col.kind === 'job') return String(c.job_id ?? '')
+    return col.get ? col.get(c) : ''
+  }
+  const displayValue = (col, value) => {
+    if (col.type === 'select' && col.options) {
+      const opt = col.options.find((o) => String(typeof o === 'string' ? o : o.value) === String(value))
+      return opt ? (typeof opt === 'string' ? opt : opt.label) : ''
+    }
+    if (col.kind === 'interview' && col.field === 'interview_at' && value) return String(value).replace('T', ' ')
+    return value
+  }
+  const beginEdit = (c, col, value) => {
+    if (adminMode) { notify('管理员模式为只读，不能修改台账', 'error'); return }
+    if (!session) { onLogin?.(); return }
+    setEditing({ candidate: c, col, orig: value })
+    setDraft(String(value ?? ''))
+  }
+  const commitEdit = async (next) => {
+    const cur = editing
+    if (!cur) return
+    setEditing(null)
+    if (String(next ?? '') === String(cur.orig ?? '')) return
+    await onSave(cur.candidate, cur.col, next)
+  }
+
+  return (
+    <div className="view-stack">
+      <div className="section-action-row">
+        <div><h2>在线台账</h2><p className="section-hint">像表格一样直接改单元格，回车或离开即写回系统。综合分、档位、AI 评价与问卷答案按口径只读。</p></div>
+        <div className="section-actions">
+          {!session && <button className="btn btn-secondary btn-small" onClick={onLogin}><LockKeyhole size={15} />登录后可编辑</button>}
+          {adminMode && <span className="read-only-badge"><ShieldCheck size={14} />管理员只读</span>}
+          <button className="btn btn-secondary btn-small" onClick={onExport} disabled={!people.length}><Download size={15} />导出 Excel</button>
+        </div>
+      </div>
+      <section className="panel ledger-panel">
+        <div className="ledger-toolbar">
+          <div className="people-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索姓名 / 电话 / 岗位 / 身份证" /></div>
+          <div className="ledger-group-tabs">{LEDGER_GROUPS.map((g) => <button key={g.id} className={activeGroup === g.id ? 'active' : ''} onClick={() => setActiveGroup(g.id)}>{g.label}</button>)}</div>
+        </div>
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <thead><tr>
+              <th className="ledger-idx">#</th>
+              {shown.map((col) => <th key={col.key} className={`lg-${col.group}`}>{col.label}</th>)}
+            </tr></thead>
+            <tbody>
+              {people.map((c, idx) => (
+                <tr key={c.id}>
+                  <td className="ledger-idx">{idx + 1}</td>
+                  {shown.map((col) => {
+                    const value = readValue(c, col)
+                    const isEditing = editing?.candidate?.id === c.id && editing?.col?.key === col.key
+                    const editable = col.kind !== 'readonly'
+                    const text = displayValue(col, value)
+                    return (
+                      <td key={col.key} className={classNames('ledger-td', !editable && 'ledger-td-ro', isEditing && 'ledger-td-editing')} title={String(text ?? '')}>
+                        {isEditing ? (
+                          col.type === 'select' ? (
+                            <select autoFocus value={draft} onChange={(e) => commitEdit(e.target.value)} onBlur={() => setEditing(null)}>
+                              <option value="">—</option>
+                              {col.options.map((o) => { const v = typeof o === 'string' ? o : o.value; const l = typeof o === 'string' ? o : o.label; return <option key={v} value={v}>{l}</option> })}
+                            </select>
+                          ) : (
+                            <input autoFocus type={col.type === 'number' ? 'number' : col.type === 'datetime-local' ? 'datetime-local' : 'text'} value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={() => commitEdit(draft)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(draft) } else if (e.key === 'Escape') setEditing(null) }} />
+                          )
+                        ) : (
+                          <button type="button" className="ledger-cell" onClick={() => beginEdit(c, col, value)} title={editable && !adminMode && session ? '点击编辑' : undefined}>
+                            <span>{text || '—'}</span>{editable && !adminMode && session && <Pencil size={11} className="ledger-pencil" />}
+                          </button>
+                        )}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!people.length && <EmptyState icon={Table2} title="没有可显示的候选人" detail="先在人员管理或批量导入里录入候选人，这里会自动同步。" />}
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function Interviews({ candidates, recordsById, onOpen, onSchedule, onDeleteRecord, onDeleteAll, readOnly }) {
   const people = candidates.filter((c) => {
     const recs = recordsById.get(String(c.id)) || []
@@ -1266,6 +1443,14 @@ function InviteEntryCard({ entry, onCopy, onReset, submitted, resetting }) {
       <div className="drawer-section-title"><h3>专属测评链接</h3><span>一人一码 · 免扫码</span></div>
       {entry?.loading ? <p className="section-hint"><LoaderCircle className="spin" size={14} /> 正在生成专属测评链接</p>
         : entry?.error ? <p className="section-hint"><AlertTriangle size={14} /> {entry.error}</p>
+        : entry?.submitted ? (<div className="invite-entry-body">
+          <div className="invite-entry-info">
+            <p className="section-hint"><Check size={14} /> 该候选人已提交问卷（一人一码，限填一次），不再显示填写链接。如需修改，点「刷新问卷」清除已填内容后重新发放。</p>
+            <div className="invite-entry-actions">
+              <button className="btn btn-secondary btn-small" onClick={() => onReset()} disabled={resetting}><RefreshCw size={14} />刷新问卷</button>
+            </div>
+          </div>
+        </div>)
         : entry?.url ? (<div className="invite-entry-body">
           {entry.qr && <img className="invite-entry-qr" src={entry.qr} alt="专属测评二维码" />}
           <div className="invite-entry-info">
@@ -1278,7 +1463,6 @@ function InviteEntryCard({ entry, onCopy, onReset, submitted, resetting }) {
           </div>
         </div>)
         : <p className="section-hint">该岗位暂未绑定问卷，请先在「测评问卷」中把问卷绑定到这个岗位。</p>}
-      {submitted && <p className="section-hint">该候选人已提交过问卷。需要修改时点「刷新问卷」，系统会清除已填内容与得分，链接恢复为可再次填写。</p>}
     </section>
   )
 }
@@ -1305,14 +1489,19 @@ function ConfirmDialog({ title, message, points = [], confirmText = '确认', da
   )
 }
 
-// 用户中心：个人资料、账号信息与由数据库授权的管理员入口。
-function UserCenterView({ session, profile, onSaveProfile, saving, isAdminAccount, adminMode, onUnlockAdmin, onExitAdmin, onSwitchAccount, onLogout, notify }) {
+// 用户中心：改昵称/联系方式 + 账号信息 + 管理员入口。
+// 管理员身份只认数据库 hb_admins 名单（RLS 保证只有本人能查到），不再使用前端明文密码。
+function UserCenterView({ session, profile, onSaveProfile, saving, isAdminAccount, adminMode, onUnlockAdmin, onExitAdmin, onSwitchAccount, onLogout, notify, jobs = [], displayNames = {}, jobShares = [], onCreateShare, onDeleteShare, sharesBusy = false }) {
   const myUid = session?.user?.id || ''
   const [form, setForm] = useState(profile)
-  const [passError, setPassError] = useState('')
   const [scanning, setScanning] = useState(false)
   const [purging, setPurging] = useState(false)
   const [orphans, setOrphans] = useState(null)
+  // 协作授权表单：选岗位 + 选用户（下拉已登录用户，或手动填 UID）
+  const [shareJobId, setShareJobId] = useState('')
+  const [shareMode, setShareMode] = useState('pick') // pick=下拉选用户, manual=手输 UID
+  const [shareUid, setShareUid] = useState('')
+  const [shareManualUid, setShareManualUid] = useState('')
   useEffect(() => { setForm(profile) }, [profile])
   const patch = (key, value) => setForm((old) => ({ ...old, [key]: value }))
   const dirty = ['name', 'phone', 'email', 'title', 'note'].some((key) => String(form[key] ?? '') !== String(profile[key] ?? ''))
@@ -1321,13 +1510,32 @@ function UserCenterView({ session, profile, onSaveProfile, saving, isAdminAccoun
     try { await navigator.clipboard.writeText(myUid); notify('已复制账号 ID') }
     catch { notify('复制失败，请手动选择复制', 'error') }
   }
-  const unlock = (event) => {
+  // 可选用户：昵称表里除自己以外的人（含昵称与 UID）。当前系统若只有管理员自己，下拉为空，可改用手输 UID。
+  const shareUserOptions = Object.entries(displayNames)
+    .filter(([uid]) => uid && uid !== myUid)
+    .map(([uid, name]) => ({ uid, name: name || uid }))
+  // 已被某岗位授权的 UID 集合，用于给出「已授权」提示
+  const assignedByJob = useMemo(() => {
+    const map = new Map()
+    for (const s of jobShares) {
+      if (!map.has(Number(s.job_id))) map.set(Number(s.job_id), new Set())
+      map.get(Number(s.job_id)).add(s.grantee_uid)
+    }
+    return map
+  }, [jobShares])
+  const submitShare = async (event) => {
     event.preventDefault()
-    if (!isAdminAccount) { setPassError('当前登录账号不在管理员名单内。请用管理员账号登录。'); return }
-    setPassError('')
-    onUnlockAdmin()
+    const job = jobs.find((j) => String(j.id) === String(shareJobId))
+    if (!job) { notify('请选择要共享的岗位', 'error'); return }
+    const uid = (shareMode === 'pick' ? shareUid : shareManualUid).trim()
+    if (!uid) { notify(shareMode === 'pick' ? '请选择被授权的用户' : '请填写被授权人的账号 ID', 'error'); return }
+    if (uid === myUid) { notify('不能把岗位授权给自己', 'error'); return }
+    const name = shareMode === 'pick' ? displayNames[uid] : ''
+    try {
+      await onCreateShare(job, uid, name)
+      setShareUid(''); setShareManualUid(''); setShareJobId('')
+    } catch (error) { notify(displayError(error), 'error') }
   }
-
   const scan = async () => {
     setScanning(true)
     try {
@@ -1399,8 +1607,8 @@ function UserCenterView({ session, profile, onSaveProfile, saving, isAdminAccoun
         <p className="section-hint">切换账号会退出当前账号并重新授权；如果浏览器自动回到同一账号，请复制地址栏链接用无痕窗口打开后登录另一个账号。</p>
       </section>
 
-      <section className="panel">
-        <div className="drawer-section-title"><h3>管理员入口</h3><span>仅限数据库中授权的管理员账号</span></div>
+      {isAdminAccount && <section className="panel">
+        <div className="drawer-section-title"><h3>管理员入口</h3><span>仅管理员账号可见</span></div>
         {adminMode ? (
           <>
             <p className="section-hint">管理员模式已开启：人员管理、候选人管道、面试安排、数据漏斗里能看到全部账号的数据（只读，不能修改别人的记录）。</p>
@@ -1409,13 +1617,67 @@ function UserCenterView({ session, profile, onSaveProfile, saving, isAdminAccoun
             </div>
           </>
         ) : (
-          <form className="modal-form" onSubmit={unlock}>
-            {passError && <div className="form-error">{passError}</div>}
-            <button className="btn btn-primary btn-small"><ShieldCheck size={15} />进入管理员模式</button>
-            <p className="section-hint">普通同事不需要这个入口——用自己的账号登录，只能看到自己的岗位、候选人和台账。</p>
-          </form>
+          <div className="profile-save-row">
+            <button className="btn btn-primary btn-small" onClick={onUnlockAdmin}><ShieldCheck size={15} />进入管理员模式</button>
+            <p className="section-hint">管理员身份由系统账号自动识别，无需输入密码。进入后可查看全员数据（只读）。</p>
+          </div>
         )}
+      </section>}
+
+      {isAdminAccount && (
+      <section className="panel collab-panel">
+        <div className="drawer-section-title"><h3>协作授权</h3><span>仅管理员可分配 · 按岗位整包共享</span></div>
+        <p className="section-hint">把某个岗位整包共享给指定同事，对方即可查看并协作处理该岗位下的候选人：可改资料、阶段、面试与台账；<b>不能删除</b>、不能改授权，AI 评分等派生字段始终只读。授权关系存于数据库，由行级安全策略真正把关。</p>
+
+        <form className="collab-form" onSubmit={submitShare}>
+          <label className="form-label">选择岗位
+            <select value={shareJobId} onChange={(e) => setShareJobId(e.target.value)} required>
+              <option value="">— 选择要共享的岗位 —</option>
+              {jobs.map((j) => <option key={j.id} value={j.id}>{j.title || j.role_title || `岗位 #${j.id}`}{j.owner_id && j.owner_id !== myUid ? `（${displayNames[j.owner_id] || '同事'}的岗位）` : ''}</option>)}
+            </select>
+          </label>
+          <div className="collab-mode-switch">
+            <button type="button" className={shareMode === 'pick' ? 'active' : ''} onClick={() => { setShareMode('pick'); setShareManualUid('') }}>选已登录用户</button>
+            <button type="button" className={shareMode === 'manual' ? 'active' : ''} onClick={() => { setShareMode('manual'); setShareUid('') }}>手输账号 ID</button>
+          </div>
+          {shareMode === 'pick' ? (
+            <label className="form-label">被授权人
+              <select value={shareUid} onChange={(e) => setShareUid(e.target.value)} required>
+                <option value="">— 选择用户 —</option>
+                {shareUserOptions.length
+                  ? shareUserOptions.map((u) => <option key={u.uid} value={u.uid}>{u.name} · {u.uid}</option>)
+                  : <option value="" disabled>暂无其他登录用户，请改用手输账号 ID</option>}
+              </select>
+            </label>
+          ) : (
+            <label className="form-label">被授权人账号 ID
+              <input value={shareManualUid} onChange={(e) => setShareManualUid(e.target.value)} placeholder="粘贴对方的账号 ID，例如 wb:xxxx" />
+            </label>
+          )}
+          <button className="btn btn-primary btn-small" disabled={sharesBusy || !shareJobId}>
+            {sharesBusy ? <LoaderCircle size={15} className="spin" /> : <UserPlus size={15} />}添加授权
+          </button>
+        </form>
+
+        <div className="collab-list">
+          <h4>已有授权（{jobShares.length}）</h4>
+          {jobShares.length === 0 ? (
+            <p className="section-hint">还没有任何授权。选择岗位与用户后点「添加授权」。</p>
+          ) : (
+            <div className="collab-rows">
+              {jobShares.map((s) => (
+                <div className="collab-row" key={s.id}>
+                  <span className="collab-row-job"><BriefcaseBusiness size={14} />{s.job_title || `岗位 #${s.job_id}`}</span>
+                  <span className="collab-row-arrow">→</span>
+                  <span className="collab-row-user"><UserRound size={14} />{s.grantee_name || displayNames[s.grantee_uid] || '用户'} <code>{s.grantee_uid}</code></span>
+                  <button type="button" className="btn btn-danger btn-small collab-row-del" onClick={() => onDeleteShare(s)} disabled={sharesBusy} title="解除授权"><Trash2 size={14} />解除</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </section>
+      )}
 
       <section className="panel">
         <div className="drawer-section-title"><h3>存储清理</h3><span>管理员可用</span></div>
@@ -1607,7 +1869,7 @@ function CandidateDrawer({ candidate, events, scoringHistory = [], evaluating, o
               </div>
             </section>}
             <section className="drawer-section"><h3>云聘员工档案</h3>{candidate.horilla_employee_id ? <div className="employee-linked"><CheckCircle2 size={20} /><div><strong>{candidate.horilla_employee_id}</strong><p>已创建员工记录，可在云聘中继续办理入职。</p></div></div> : <div className="empty-inline"><Database size={20} /><p>尚未同步。进入 Offer 阶段后，可人工确认并创建员工。</p>{['offer', 'hired'].includes(candidate.stage) && <button className="btn btn-primary btn-small" onClick={() => onSync(candidate)}>同步到云聘</button>}</div>}</section>
-            <section className="drawer-section drawer-danger"><h3>危险操作</h3><button className="btn btn-danger" onClick={() => onDelete(candidate)} disabled={evaluating}><Trash2 size={15} />删除该候选人</button><p className="section-hint">删除后不可恢复，候选人档案、评估与问卷记录一并清除。</p></section>
+            <section className="drawer-section drawer-danger"><h3>危险操作</h3><button className="btn btn-danger" onClick={() => onDelete(candidate)} disabled={evaluating}><Trash2 size={15} />删除该候选人</button><p className="section-hint">删除后有 8 秒可撤销；到期后候选人档案、评估与问卷记录一并清除。</p></section>
           </>}
           {tab === 'activity' && <section className="drawer-section"><h3>完整操作记录</h3><div className="candidate-timeline">{candidateEvents.map((event) => <div className="timeline-item" key={event.id}><span /><div><strong>{event.title}</strong><p>{event.detail}</p><small>{formatDate(event.created_at, true)}</small></div></div>)}{!candidateEvents.length && <EmptyState icon={Clock3} title="暂无动态" detail="阶段变更、评估与同步会记录在这里。" />}</div></section>}
         </div>
@@ -1982,6 +2244,28 @@ function SurveyResultsDrawer({ survey, responses, loading, onExport, onClose }) 
           <button className="btn btn-primary" onClick={onExport} disabled={!responses.length}><Download size={16} />导出 Excel</button>
         </div>
       </aside>
+    </div>
+  )
+}
+
+// 后台访问门禁拦截页：无关账号登录后看到，避免候选人/外部账号看到招聘后台外壳。
+function NoAccessPage({ session, onLogout, onSwitchAccount }) {
+  const name = (session?.user?.name || '').trim()
+  return (
+    <div className="survey-page">
+      <div className="survey-card-panel no-access-panel">
+        <div className="no-access-icon"><ShieldCheck size={32} /></div>
+        <h1>这个账号没有招聘工作区</h1>
+        <p>当前登录的账号（{name || '未命名账号'}）没有被开通聘桥的招聘权限。</p>
+        <ul className="no-access-hints">
+          <li>如果你只是填写测评问卷，直接关闭本页即可，答卷不受影响。</li>
+          <li>如果你是招聘同事，请联系管理员为你的账号开通访问权限。</li>
+        </ul>
+        <div className="no-access-actions">
+          <button type="button" className="btn btn-secondary" onClick={onSwitchAccount}>换一个账号登录</button>
+          <button type="button" className="btn btn-primary" onClick={onLogout}>退出登录</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -2644,7 +2928,7 @@ function EvaluateModal({ jobs, onClose, onSubmit, running, step, onEditJd }) {
   const [parseHint, setParseHint] = useState('')
   const [jobId, setJobId] = useState(jobs[0]?.id || '')
   const job = jobs.find((j) => String(j.id) === String(jobId))
-  const steps = [['extract', '解析简历文本'], ['evaluate', '按岗位 JD 评估证据'], ['upload', '加密保存原简历'], ['save', '写入候选人与审计记录']]
+  const steps = [['extract', '解析简历文本（扫描件自动识别）'], ['evaluate', '按岗位 JD 评估证据'], ['upload', '加密保存原简历'], ['save', '写入候选人与审计记录']]
   const patchProfile = (key, value) => setProfile((old) => ({ ...old, [key]: value }))
 
   // 上传后自动识别姓名/电话/邮箱/城市 + 台账字段（性别/年龄/学历/院校/专业/技能/薪资/居住地）
@@ -2686,7 +2970,7 @@ function EvaluateModal({ jobs, onClose, onSubmit, running, step, onEditJd }) {
 
   return <ModalShell title="AI 评估新简历" subtitle="上传简历原件，按所选岗位的 JD 标准生成带证据的匹配分析。" onClose={running ? () => {} : onClose}>
     <form className="modal-form" onSubmit={(e) => { e.preventDefault(); onSubmit({ file, name, job, phone, email, location, profile }) }}>
-      <label className={classNames('upload-zone', file && 'has-file')}><input type="file" accept={ATTACHMENT_ACCEPT} onChange={(e) => handleFile(e.target.files[0])} disabled={running} required />{file ? <><FileText size={28} /><strong>{file.name}</strong><span>{(file.size / 1024 / 1024).toFixed(2)} MB · 点击更换</span></> : <><UploadCloud size={30} /><strong>上传简历</strong><span>支持 {ATTACHMENT_FORMAT_TEXT}，最大 10 MB；扫描件请先 OCR</span></>}</label>
+      <label className={classNames('upload-zone', file && 'has-file')}><input type="file" accept={ATTACHMENT_ACCEPT} onChange={(e) => handleFile(e.target.files[0])} disabled={running} required />{file ? <><FileText size={28} /><strong>{file.name}</strong><span>{(file.size / 1024 / 1024).toFixed(2)} MB · 点击更换</span></> : <><UploadCloud size={30} /><strong>上传简历</strong><span>支持 {ATTACHMENT_FORMAT_TEXT}，最大 10 MB；扫描件自动识别</span></>}</label>
       {parsing && <p className="section-hint parse-hint"><LoaderCircle size={14} className="spin" /> 正在识别简历中的姓名、电话、邮箱与城市…</p>}
       {!parsing && parseHint && <p className="section-hint parse-hint"><ShieldCheck size={14} /> {parseHint}</p>}
       <label className="form-label">候选人姓名<input value={name} onChange={(e) => setName(e.target.value)} placeholder="上传后自动识别，可修改" required disabled={running} /></label>
@@ -2791,12 +3075,14 @@ export default function App() {
   const [candidates, setCandidates] = useState([])
   const [events, setEvents] = useState([])
   const [interviewRecords, setInterviewRecords] = useState([])
+  const [ledgerResponses, setLedgerResponses] = useState([])
   const [view, setView] = useState('people')
   const [selected, setSelected] = useState(null)
   const [modal, setModal] = useState(null)
   // 用户中心：个人资料 + 管理员身份（名单在库里）+ 管理员模式开关
   const [profile, setProfile] = useState({ name: '', phone: '', email: '', title: '', note: '' })
   const [displayNames, setDisplayNames] = useState({})
+  const [jobShares, setJobShares] = useState([]) // 协作授权关系：管理员看全部、岗位主人看自己的、被授权人看授给自己的
   const [isAdminAccount, setIsAdminAccount] = useState(false)
   const [adminMode, setAdminMode] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -2809,6 +3095,8 @@ export default function App() {
   const [selectedEmployee, setSelectedEmployee] = useState(null)
   const [employeeSaving, setEmployeeSaving] = useState(false)
   const [toast, setToast] = useState(null)
+  const [undoState, setUndoState] = useState(null) // { label, seconds, left } 撤销式删除倒计时
+  const pendingDeleteRef = useRef(null) // { timer, tick, run } 挂起的删除任务
   const [mobileNav, setMobileNav] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [messages, setMessages] = useState([])
@@ -2832,6 +3120,48 @@ export default function App() {
   const unreadCount = messages.filter((message) => !message.read_at).length
 
   const notify = (message, tone = 'success') => setToast({ message, tone })
+
+  // 撤销式删除：删除动作延迟 8 秒执行，期间可撤销，撤销则数据完全不动
+  const UNDO_SECONDS = 8
+  const clearPendingDelete = () => {
+    const task = pendingDeleteRef.current
+    if (!task) return
+    clearTimeout(task.timer)
+    clearInterval(task.tick)
+    pendingDeleteRef.current = null
+    setUndoState(null)
+  }
+  // 启动一个可撤销的删除；若上一条未执行完则先立即执行它，避免多个删除互相覆盖
+  const scheduleDelete = (label, run) => {
+    const prev = pendingDeleteRef.current
+    if (prev) { clearTimeout(prev.timer); clearInterval(prev.tick); prev.run() }
+    setUndoState({ label, left: UNDO_SECONDS, seconds: UNDO_SECONDS })
+    const startedAt = Date.now()
+    const tick = setInterval(() => {
+      const left = Math.max(0, UNDO_SECONDS - Math.floor((Date.now() - startedAt) / 1000))
+      setUndoState({ label, left, seconds: UNDO_SECONDS })
+    }, 250)
+    const timer = setTimeout(() => {
+      clearInterval(tick)
+      pendingDeleteRef.current = null
+      setUndoState(null)
+      run()
+    }, UNDO_SECONDS * 1000)
+    pendingDeleteRef.current = { timer, tick, run }
+  }
+  const cancelDelete = () => {
+    const task = pendingDeleteRef.current
+    if (task) { clearTimeout(task.timer); clearInterval(task.tick) }
+    pendingDeleteRef.current = null
+    setUndoState(null)
+    notify('已撤销删除，数据保持不变')
+  }
+  // 组件卸载时清理，避免定时器泄漏
+  useEffect(() => () => {
+    const task = pendingDeleteRef.current
+    if (task) { clearTimeout(task.timer); clearInterval(task.tick) }
+  }, [])
+
   const refreshMessages = async (currentSession = session) => {
     if (!currentSession) { setMessages([]); return }
     try { setMessages(await fetchMessages(currentSession)) } catch (error) { console.warn('消息加载失败', error) }
@@ -2850,6 +3180,7 @@ export default function App() {
     try { setPersons(await fetchPersons(currentSession)) } catch (error) { console.warn('人员加载失败', error) }
     try { setInvites(await fetchInvites(currentSession)) } catch (error) { console.warn('邀请加载失败', error) }
     try { setInterviewRecords(await fetchInterviews(currentSession)) } catch (error) { console.warn('面试记录加载失败', error) }
+    try { setJobShares(await fetchJobShares(currentSession)) } catch (error) { console.warn('协作授权加载失败', error) }
   }
   const refresh = async (currentSession = session) => {
     const data = await loadWorkspace(currentSession)
@@ -2862,6 +3193,7 @@ export default function App() {
     } else {
       setFunnelEvents([]); setPersons([]); setInvites([]); setInterviewRecords([])
     }
+    return data
   }
 
   useEffect(() => {
@@ -2882,12 +3214,26 @@ export default function App() {
           try { setPersons(await fetchPersons(currentSession)) } catch (error) { console.warn('人员加载失败', error) }
           try { setInvites(await fetchInvites(currentSession)) } catch (error) { console.warn('邀请加载失败', error) }
           try { setInterviewRecords(await fetchInterviews(currentSession)) } catch (error) { console.warn('面试记录加载失败', error) }
+          try { setJobShares(await fetchJobShares(currentSession)) } catch (error) { console.warn('协作授权加载失败', error) }
           try { await refreshProfile(currentSession) } catch (error) { console.warn('资料加载失败', error) }
         }
       } catch (error) { notify(displayError(error), 'error') } finally { if (mounted) setLoading(false) }
     })()
     return () => { mounted = false }
   }, [])
+
+  // 在线台账：进入该视图或候选人集合变化时，加载全部作答用于「问卷·题目」只读列。
+  // 视图常驻挂载但内容隐藏，这里只在真正切到 ledger 时才拉取，避免无谓请求。
+  const loadLedgerResponses = async (currentSession, ids) => {
+    if (!currentSession || !ids?.length) { setLedgerResponses([]); return }
+    try { setLedgerResponses(await fetchCandidateSurveyResponses(ids, currentSession)) } catch (error) { console.warn('台账作答加载失败', error) }
+  }
+  useEffect(() => {
+    if (view !== 'ledger' || !session || loading) return
+    loadLedgerResponses(session, candidates.map((c) => c.id))
+    // 候选人集合用 id 串做依赖，避免对象引用变化导致重复请求
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, session, loading, candidates.map((c) => c.id).join(',')])
 
   // C 端候选人提交问卷等远端变更自动同步进台账与列表，无需手动刷新浏览器
   useEffect(() => {
@@ -2950,21 +3296,73 @@ export default function App() {
     notify('已退出管理员模式，仅显示本人数据')
   }
 
-  // 数据可见范围：非管理员模式下一律只看自己的（服务端 RLS 也已按账号隔离，这里是双保险）
+  // ===== 岗位协作授权（管理员分配）=====
+  const [sharesBusy, setSharesBusy] = useState(false)
+  const handleCreateShare = async (job, granteeUid, granteeName) => {
+    if (!isAdminAccount) { notify('只有管理员能分配协作授权', 'error'); return }
+    setSharesBusy(true)
+    try {
+      await createJobShare(job, granteeUid, granteeName, session)
+      setJobShares(await fetchJobShares(session))
+      notify(`已把「${job.title || '岗位'}」授权给 ${granteeName || granteeUid}`)
+    } catch (error) { notify(displayError(error), 'error') } finally { setSharesBusy(false) }
+  }
+  const handleDeleteShare = async (share) => {
+    if (!isAdminAccount) { notify('只有管理员能解除协作授权', 'error'); return }
+    if (!window.confirm(`确定解除「${share.job_title || `岗位 #${share.job_id}`}」对 ${share.grantee_name || share.grantee_uid} 的授权？对方将无法再看到该岗位下的协作数据。`)) return
+    setSharesBusy(true)
+    try {
+      await deleteJobShare(share, session)
+      setJobShares(await fetchJobShares(session))
+      notify('授权已解除')
+    } catch (error) { notify(displayError(error), 'error') } finally { setSharesBusy(false) }
+  }
+
+  // 数据可见范围：本人数据 + 被授权协作的岗位数据（服务端 RLS 同样放行，这里是前端一致性过滤）
   const myUid = session?.user?.id || ''
-  const isMine = (row) => !session || !row.owner_id || row.owner_id === myUid
+  // 授给「当前用户」的岗位 id 集合——只有 grantee_uid = 我 的授权才让我看到别人的数据
+  const grantedJobIds = useMemo(
+    () => new Set(jobShares.filter((s) => s.grantee_uid === myUid).map((s) => Number(s.job_id))),
+    [jobShares, myUid],
+  )
+  // 后台访问门禁：挡住「填完问卷用自己账号登录进来、但在这个系统里什么都没有」的无关账号。
+  // 放行条件（满足其一）：未登录演示 / 管理员 / 被授权协作 / 名下已有候选人或岗位数据。
+  // RLS 本就按账号隔离数据，这一层只挡住无关账号看到后台外壳，不是数据安全的唯一防线。
+  const hasWorkspaceAccess = useMemo(() => {
+    if (!session || loading) return true // 演示模式放行；加载中先放行，避免闪烁误拦
+    if (isAdminAccount) return true
+    if (grantedJobIds.size > 0) return true
+    if (candidates.some((c) => c.owner_id === myUid) || jobs.some((j) => j.owner_id === myUid)) return true
+    return false
+  }, [session, loading, isAdminAccount, grantedJobIds, candidates, jobs, myUid])
+  // 是否是「同事共享给我」的数据（本人数据 owner_id = 我；协作数据 owner_id = 别人）。
+  // 协作者只能改日常字段，删除类操作一律拒绝（数据库同样未放行协作 DELETE）。
+  const isSharedRow = (row) => Boolean(session && row?.owner_id && row.owner_id !== myUid)
+  // 一条候选人是否可见：本人的，或其所属岗位已授权给我协作
+  const isMineCandidate = (row) => {
+    if (!session) return true
+    if (!row.owner_id || row.owner_id === myUid) return true
+    return row.job_id != null && grantedJobIds.has(Number(row.job_id))
+  }
+  // 岗位是否可见：本人的，或授权给我的
+  const isMineJob = (row) => {
+    if (!session) return true
+    if (!row.owner_id || row.owner_id === myUid) return true
+    return grantedJobIds.has(Number(row.id))
+  }
   const scopedCandidates = useMemo(
-    () => (adminMode ? candidates : candidates.filter(isMine)),
-    [candidates, adminMode, myUid, session],
+    () => (adminMode ? candidates : candidates.filter(isMineCandidate)),
+    [candidates, adminMode, myUid, session, grantedJobIds],
   )
   const scopedJobs = useMemo(
-    () => (adminMode ? jobs : jobs.filter(isMine)),
-    [jobs, adminMode, myUid, session],
+    () => (adminMode ? jobs : jobs.filter(isMineJob)),
+    [jobs, adminMode, myUid, session, grantedJobIds],
   )
-  // 面试记录：RLS 已按账号隔离，这里再按当前视图范围过滤一遍（管理员模式看全部、只读）。
+  // 面试记录：本人候选人的 + 协作岗位候选人的（通过候选人 id 关联）；管理员模式看全部、只读。
+  const scopedCandidateIdSet = useMemo(() => new Set(scopedCandidates.map((c) => Number(c.id))), [scopedCandidates])
   const scopedInterviewRecords = useMemo(
-    () => (adminMode ? interviewRecords : interviewRecords.filter(isMine)),
-    [interviewRecords, adminMode, myUid, session],
+    () => (adminMode ? interviewRecords : interviewRecords.filter((r) => scopedCandidateIdSet.has(Number(r.candidate_id)))),
+    [interviewRecords, adminMode, scopedCandidateIdSet],
   )
   // 按候选人 id 聚合，视图里直接按轮次取
   const interviewsByCandidate = useMemo(() => {
@@ -2981,7 +3379,7 @@ export default function App() {
     if (!session) { setModal({ type: 'login' }); return }
     if (!input?.job) { notify('请先选择申请职位', 'error'); return }
     setActionLoading(true); setEvaluateStep('extract')
-    try { const candidate = await evaluateResume(input, session, setEvaluateStep); await bindSurveyFor(candidate, input.job); await refresh(); setModal(null); setSelected(candidate); notify('评估完成，已保存候选人和证据记录') } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
+    try { const candidate = await evaluateResume(input, session, setEvaluateStep); await bindSurveyFor(candidate, input.job); const data = await refresh(); setModal(null); setSelected(data.candidates.find((c) => c.id === candidate.id) || candidate); notify('评估完成，已保存候选人和证据记录') } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
   }
 
   // 简历入库后立即生成并绑定岗位问卷（一人一码），同时把「已邀请」状态同步进前端列表，
@@ -3054,6 +3452,10 @@ export default function App() {
     setCandidates((old) => old.map((c) => (String(c.id) === String(candidateId)
       ? { ...c, job_id: job.id, role_title: job.title }
       : c)))
+    // 抽屉正开着这个候选人时同步岗位，避免详情/测评入口停留在旧岗位
+    setSelected((old) => (old && String(old.id) === String(candidateId)
+      ? { ...old, job_id: job.id, role_title: job.title }
+      : old))
     const survey = jobCurrentSurvey(job, surveys)
     await revokeCandidateInvites(candidateId, survey?.id, session)
     if (survey) {
@@ -3074,6 +3476,48 @@ export default function App() {
     } catch (error) { notify(displayError(error), 'error') }
   }
 
+  // 在线台账单元格写回：按列类型分派到既有写函数，保证与详情/管道里的修改同源。
+  // 基础资料 → updateCandidateProfile；面试 → saveInterviewRecord；
+  // 阶段 → moveCandidate；岗位 → updateCandidateJob（含问卷入口重绑）。
+  const handleLedgerSave = async (candidate, col, value) => {
+    if (!session) return requireAuth()
+    if (adminMode) { notify('管理员模式为只读，不能修改台账', 'error'); return }
+    setActionLoading(true)
+    try {
+      if (col.kind === 'profile') {
+        await updateCandidateProfile(candidate, { [col.field]: value }, session)
+      } else if (col.kind === 'interview') {
+        const patch = col.field === 'interview_at'
+          ? { interview_at: value ? new Date(value).toISOString() : null }
+          : { [col.field]: value }
+        await saveInterviewRecord(candidate, col.round, patch, session)
+        if (patch.interview_at && candidate.stage === 'screening') await moveCandidate(candidate, 'interview', session)
+        else if (patch.interview_at) await setInterviewAt(candidate, patch.interview_at, session)
+      } else if (col.kind === 'stage') {
+        await moveCandidate(candidate, value, session)
+      } else if (col.kind === 'job') {
+        const job = jobs.find((j) => String(j.id) === String(value))
+        if (!job) throw new Error('岗位不存在或已下架')
+        await handleChangeCandidateJob(candidate.id, job)
+      }
+      await refresh()
+      if (col.kind === 'interview' && view === 'ledger') {
+        loadLedgerResponses(session, scopedCandidates.map((c) => c.id))
+      }
+      notify(`${candidate.name} 的「${col.label}」已更新`)
+    } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
+  }
+
+  // 在线台账导出：导出全部当前账号可见候选人的台账（含问卷列与面试分列）
+  const handleLedgerExport = async () => {
+    if (!scopedCandidates.length) return
+    try {
+      const allResponses = ledgerResponses.length ? ledgerResponses : await fetchCandidateSurveyResponses(scopedCandidates.map((c) => c.id), session)
+      exportLedgerXlsx(scopedCandidates, '招聘台账-在线', { responses: allResponses, surveys, interviewRecords })
+      notify('台账已导出')
+    } catch (error) { notify(displayError(error), 'error') }
+  }
+
   // 刷新问卷：二次确认后清除答卷与得分，链接恢复可再次填写
   const handleConfirmResetSurvey = async () => {
     if (!resetSurveyTarget) return
@@ -3086,46 +3530,53 @@ export default function App() {
     } catch (error) { notify(displayError(error), 'error') } finally { setResettingSurvey(false) }
   }
 
-  const handleDeleteCandidate = async (candidate) => {
+  const handleDeleteCandidate = (candidate) => {
     if (!session) return requireAuth()
-    if (!window.confirm(`确定删除候选人「${candidate.name}」？其评估、问卷答卷与评分记录会一并清除，不可恢复。`)) return
-    setActionLoading(true)
-    try {
-      await deleteCandidate(candidate, session)
-      setSelected(null)
-      await refresh()
-      notify(`已删除 ${candidate.name}`)
-    } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
+    if (isSharedRow(candidate)) { notify('这是同事共享给你协作的候选人，只有本人能删除', 'error'); return }
+    scheduleDelete(`候选人「${candidate.name}」`, async () => {
+      setActionLoading(true)
+      try {
+        await deleteCandidate(candidate, session)
+        setSelected(null)
+        await refresh()
+        notify(`已删除 ${candidate.name}`)
+      } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
+    })
   }
 
-  const handleDeleteCandidates = async (ids) => {
+  const handleDeleteCandidates = (ids) => {
     if (!session) return requireAuth()
     const list = (Array.isArray(ids) ? ids : [ids]).map((id) => Number(id)).filter(Boolean)
     if (!list.length) return
-    if (!window.confirm(`确定删除选中的 ${list.length} 位候选人？其评估、问卷答卷与评分记录会一并清除，不可恢复。`)) return
-    setActionLoading(true)
-    try {
-      let done = 0
-      for (const id of list) {
-        const candidate = candidates.find((c) => Number(c.id) === id)
-        if (!candidate) continue
-        await deleteCandidate(candidate, session)
-        done += 1
-      }
-      await refresh()
-      notify(`已删除 ${done} 位候选人`)
-    } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
+    const targets = list.map((id) => candidates.find((c) => Number(c.id) === id)).filter(Boolean)
+    if (!targets.length) return
+    const shared = targets.filter(isSharedRow)
+    if (shared.length) { notify(`选中的 ${shared.length} 位是同事共享协作的候选人，只有本人能删除`, 'error'); return }
+    scheduleDelete(`${targets.length} 位候选人`, async () => {
+      setActionLoading(true)
+      try {
+        let done = 0
+        for (const candidate of targets) {
+          await deleteCandidate(candidate, session)
+          done += 1
+        }
+        await refresh()
+        notify(`已删除 ${done} 位候选人`)
+      } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
+    })
   }
 
-  const handleDeleteJob = async (job) => {
+  const handleDeleteJob = (job) => {
     if (!session) return requireAuth()
-    if (!window.confirm(`确定删除岗位「${job.title}」？候选人记录会保留，但岗位字段将留空。`)) return
-    setActionLoading(true)
-    try {
-      await deleteJob(job, session)
-      await refresh()
-      notify(`已删除岗位 ${job.title}`)
-    } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
+    if (isSharedRow(job)) { notify('这是同事共享给你的协作岗位，只有本人能删除', 'error'); return }
+    scheduleDelete(`岗位「${job.title}」`, async () => {
+      setActionLoading(true)
+      try {
+        await deleteJob(job, session)
+        await refresh()
+        notify(`已删除岗位 ${job.title}`)
+      } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
+    })
   }
 
   // 候选人详情里的专属评测入口（始终提供，方便随时补填问卷）
@@ -3136,11 +3587,27 @@ export default function App() {
 
   useEffect(() => {
     if (!selected || !session) return
-    if (inviteEntries[selected.id]) return
+    // 已提交的候选人不再自动发邀请：一人一码限填一次，再发新码只会让对方
+    // 白填一遍后被 already_submitted 拒收。需要修改时走「刷新问卷」（重置后再生成）。
+    if (selected.survey_status === 'submitted') {
+      setInviteEntries((old) => (old[selected.id]?.submitted ? old : { ...old, [selected.id]: { submitted: true } }))
+      return
+    }
+    const job = jobs.find((j) => String(j.id) === String(selected.job_id))
+    const survey = jobCurrentSurvey(job, surveys)
+    const cached = inviteEntries[selected.id]
+    // 缓存命中条件：岗位与问卷都没变，且缓存的邀请在最新 invites 里仍是 active。
+    // 错误状态永不缓存——问卷/岗位数据到位后（本 effect 依赖 invites/surveys/jobs）
+    // 会自动重试，避免出现「该岗位暂未绑定问卷」卡死再也出不来。
+    if (cached && !cached.error) {
+      const stillValid = String(cached.jobId) === String(job?.id)
+        && String(cached.surveyId) === String(survey?.id)
+        && (!cached.token || invites.some((i) => i.token === cached.token && i.status === 'active'))
+      if (stillValid) return
+    }
     let alive = true
     ;(async () => {
       try {
-        const job = jobs.find((j) => String(j.id) === String(selected.job_id))
         const urlRef = { url: '', qr: '' }
         const inv = await ensureCandidateInvite(selected, job, surveys, invites, session)
         if (!alive) return
@@ -3150,7 +3617,7 @@ export default function App() {
         const qr = await QRCode.toDataURL(url, { width: 200, margin: 1, color: QR_COLORS })
         if (!alive) return
         urlRef.qr = qr
-        setInviteEntries((old) => ({ ...old, [selected.id]: { url, qr } }))
+        setInviteEntries((old) => ({ ...old, [selected.id]: { url, qr, token: inv.token, jobId: job?.id, surveyId: survey?.id } }))
         setInvites((old) => old.some((i) => i.token === inv.token) ? old : [{ ...inv, candidate_id: selected.id }, ...old])
       } catch (error) {
         if (alive) setInviteEntries((old) => ({ ...old, [selected.id]: { error: displayError(error) } }))
@@ -3158,7 +3625,7 @@ export default function App() {
     })()
     return () => { alive = false }
     // invites/surveys/jobs 进入依赖：导入后立即绑定的邀请进入状态后，抽屉能直接复用，不会重复建码
-  }, [selected?.id, session, invites, surveys, jobs])
+  }, [selected?.id, selected?.job_id, session, invites, surveys, jobs])
 
   // 保存某一轮面试记录：管理员模式只读，直接拒绝写入。
   // 首次带面试时间且候选人还在筛选阶段时，顺带推进到面试阶段（沿用原来的漏斗事件口径）。
@@ -3183,6 +3650,7 @@ export default function App() {
   const handleDeleteInterview = async (record) => {
     if (!session) return requireAuth()
     if (adminMode) { notify('管理员模式只读，不能删除面试记录', 'error'); return }
+    if (isSharedRow(record)) { notify('这是同事共享协作的面试记录，只有本人能删除', 'error'); return }
     setActionLoading(true)
     try { await deleteInterviewRecord(record, session); await refresh(); notify('面试记录已删除') } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
   }
@@ -3190,6 +3658,7 @@ export default function App() {
   const handleDeleteInterviewFromTable = async (candidate, record) => {
     if (!session) return requireAuth()
     if (adminMode) { notify('管理员模式只读，不能删除面试记录', 'error'); return }
+    if (isSharedRow(candidate)) { notify('这是同事共享协作的数据，只有本人能删除面试记录', 'error'); return }
     if (!window.confirm(`确定删除 ${candidate.name} 的「${record.round}」面试记录？不可恢复。`)) return
     setActionLoading(true)
     try { await deleteInterviewRecord(record, session); await refresh(); notify(`${candidate.name}的${record.round}记录已删除`) } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
@@ -3198,6 +3667,7 @@ export default function App() {
   const handleDeleteAllInterviews = async (candidate, recs) => {
     if (!session) return requireAuth()
     if (adminMode) { notify('管理员模式只读，不能删除面试记录', 'error'); return }
+    if (isSharedRow(candidate)) { notify('这是同事共享协作的数据，只有本人能删除面试记录', 'error'); return }
     if (!window.confirm(`确定清空 ${candidate.name} 的全部面试记录（一面、二面）？该候选人会从面试安排表移除，不可恢复。`)) return
     setActionLoading(true)
     try { await deleteCandidateInterviews(candidate, recs, session); await refresh(); notify(`${candidate.name}的面试记录已清空`) } catch (error) { notify(displayError(error), 'error') } finally { setActionLoading(false) }
@@ -3448,8 +3918,10 @@ export default function App() {
         return <IntegrationView integration={integration} candidates={scopedCandidates} employees={employees} onSync={openSync} onRefresh={refreshIntegration} loading={integrationLoading} onConfigure={handleConfigureHorilla} onClear={handleClearHorilla} saving={integrationSaving} onOpenEmployee={openEmployee} onExportAll={handleExportAll} />
       case 'batch':
         return <BatchImportView jobs={scopedJobs} surveys={surveys} session={session} onLogin={requireAuth} onFinished={refresh} onBound={bindSurveyFor} onSaveProfile={handleBatchProfileSave} onChangeJob={handleChangeCandidateJob} notify={notify} />
+      case 'ledger':
+        return <LedgerView candidates={scopedCandidates} jobs={scopedJobs} surveys={surveys} responses={ledgerResponses} recordsById={interviewsByCandidate} session={session} adminMode={adminMode} onSave={handleLedgerSave} onOpen={handleOpenCandidate} onLogin={requireAuth} notify={notify} onExport={handleLedgerExport} />
       case 'account':
-        return <UserCenterView session={session} profile={profile} onSaveProfile={handleSaveProfile} saving={savingProfile} isAdminAccount={isAdminAccount} adminMode={adminMode} onUnlockAdmin={handleUnlockAdmin} onExitAdmin={handleExitAdmin} onSwitchAccount={handleSwitchAccount} onLogout={handleLogout} notify={notify} />
+        return <UserCenterView session={session} profile={profile} onSaveProfile={handleSaveProfile} saving={savingProfile} isAdminAccount={isAdminAccount} adminMode={adminMode} onUnlockAdmin={handleUnlockAdmin} onExitAdmin={handleExitAdmin} onSwitchAccount={handleSwitchAccount} onLogout={handleLogout} notify={notify} jobs={jobs} displayNames={displayNames} jobShares={jobShares} sharesBusy={sharesBusy} onCreateShare={handleCreateShare} onDeleteShare={handleDeleteShare} />
       default:
         return null
     }
@@ -3458,6 +3930,9 @@ export default function App() {
   if (activeInviteToken) return <SurveyFillPage inviteToken={activeInviteToken} />
 
   if (loading) return <div className="app-loading"><BrandMark size="lg" /><LoaderCircle className="spin" size={24} /><p>正在准备聘桥工作区</p></div>
+
+  // 无权限账号拦截：填问卷的人用自己的账号登录后台时会落到这里。
+  if (!hasWorkspaceAccess) return <NoAccessPage session={session} onLogout={handleLogout} onSwitchAccount={handleSwitchAccount} />
 
   return (
     <div className="app-shell">
@@ -3499,6 +3974,12 @@ export default function App() {
         onClose={() => { if (!resettingSurvey) setResetSurveyTarget(null) }}
       />}
       {toast && <div className={`toast toast-${toast.tone}`}>{toast.tone === 'error' ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}<span>{toast.message}</span><button onClick={() => setToast(null)}><X size={15} /></button></div>}
+      {undoState && <div className="undo-bar" role="alertdialog" aria-live="assertive">
+        <span className="undo-bar-icon"><Trash2 size={17} /></span>
+        <div className="undo-bar-body"><strong>已安排删除：{undoState.label}</strong><span>{undoState.left} 秒后执行，届时评估与问卷记录一并清除</span></div>
+        <div className="undo-bar-progress"><i style={{ width: `${(undoState.left / undoState.seconds) * 100}%` }} /></div>
+        <button type="button" className="undo-bar-btn" onClick={cancelDelete}><Undo2 size={15} />撤销</button>
+      </div>}
     </div>
   )
 }

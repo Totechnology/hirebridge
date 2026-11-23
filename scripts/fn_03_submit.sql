@@ -35,6 +35,12 @@ DECLARE
 BEGIN
   v_caller := auth.uid();
 
+  -- 本函数是候选人填问卷的服务端可信写路径：后续对 hb_candidates 的更新
+  -- （person 关联 + survey_status）以及内部触发的 hb_compute_composite 重算
+  -- 都要让协作写保护触发器（hb_collab_guard_candidate_trg）放行。
+  -- is_local=true → 仅当前事务有效，事务结束自动失效，客户端无法借道绕过。
+  PERFORM set_config('hb.internal_write', 'on', true);
+
   IF p_token IS NULL OR p_token = '' THEN
     RETURN jsonb_build_object('error', 'invite_missing');
   END IF;
@@ -107,7 +113,9 @@ BEGIN
   END IF;
 
   -- 自然人识别：微信 uid 优先 → 姓名+手机号 → 仅手机号
-  IF v_caller IS NOT NULL THEN
+  -- 注意：匿名访问时 auth.uid() 返回 'anon'（不是 NULL），绝不能当作微信身份
+  -- 去匹配自然人，否则所有匿名填写者会被并进同一条档案（2026-11-20 事故）。
+  IF v_caller IS NOT NULL AND v_caller <> 'anon' THEN
     SELECT p.id INTO v_person_id FROM hb_persons p
      WHERE p.owner_id = v_survey.owner_id AND p.wechat_user_id = v_caller
      ORDER BY p.id LIMIT 1;
@@ -124,13 +132,13 @@ BEGIN
   END IF;
   IF v_person_id IS NULL THEN
     INSERT INTO hb_persons (owner_id, name, phone_normalized, phone, wechat_user_id)
-    VALUES (v_survey.owner_id, trim(p_name), NULLIF(v_phone, ''), NULLIF(trim(p_phone), ''), v_caller)
+    VALUES (v_survey.owner_id, trim(p_name), NULLIF(v_phone, ''), NULLIF(trim(p_phone), ''), NULLIF(v_caller, 'anon'))
     RETURNING id INTO v_person_id;
     v_person_no := 'P-' || to_char(now(), 'YYYY') || '-' || lpad(v_person_id::text, 4, '0');
     UPDATE hb_persons SET person_no = v_person_no WHERE id = v_person_id;
   ELSE
     UPDATE hb_persons
-       SET wechat_user_id = coalesce(wechat_user_id, v_caller),
+       SET wechat_user_id = coalesce(wechat_user_id, NULLIF(v_caller, 'anon')),
            phone_normalized = coalesce(phone_normalized, NULLIF(v_phone, '')),
            phone = coalesce(phone, NULLIF(trim(p_phone), ''))
      WHERE id = v_person_id;
@@ -160,6 +168,12 @@ BEGIN
      WHERE id = v_cand_id;
   END IF;
 
+  -- 内部可信标记：token 已核验、候选人身份已核对、记录已落库。
+  -- 后续内部调用的 hb_apply_survey_profile / hb_compute_composite / hb_record_funnel
+  -- 凭此标记放行；标记绑定本候选人 id，攻击者无法借道改写他人。
+  -- is_local=true → 仅当前事务有效，客户端无法跨请求伪造。
+  PERFORM set_config('hb.trusted_candidate', v_cand_id::text, true);
+
   -- 防重复：同一人同一问卷只能提交一次
   SELECT r.id INTO v_existing FROM hb_survey_responses r
    WHERE r.candidate_id = v_cand_id AND r.survey_id = v_survey.id LIMIT 1;
@@ -174,10 +188,13 @@ BEGIN
           (v_score->>'score')::numeric, v_score->'detail', now(), v_invite.id, v_person_id, v_cand_id,
           coalesce(v_survey.version, 1),
           (SELECT j.rule_version FROM hb_jobs j WHERE j.id = v_invite.job_id),
-          false, v_caller)
+          false, NULLIF(v_caller, 'anon'))
   RETURNING id INTO v_resp_id;
 
-  UPDATE hb_survey_invites SET status = 'used', used_at = now(), used_by = v_caller WHERE id = v_invite.id;
+  UPDATE hb_survey_invites SET status = 'used', used_at = now(), used_by = NULLIF(v_caller, 'anon') WHERE id = v_invite.id;
+
+  -- 档案题（pf_*）白名单回填到候选人台账（身份证、期望薪资、入职时间等）
+  PERFORM hb_apply_survey_profile(v_cand_id, p_answers);
 
   INSERT INTO hb_funnel_events (owner_id, candidate_id, job_id, project_id, stage, channel, event_at)
   VALUES (v_survey.owner_id, v_cand_id, v_invite.job_id,

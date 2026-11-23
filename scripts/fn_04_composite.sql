@@ -20,6 +20,18 @@ BEGIN
   SELECT * INTO c FROM hb_candidates WHERE id = p_candidate_id;
   IF c.id IS NULL THEN RETURN jsonb_build_object('error', 'candidate_missing'); END IF;
 
+  -- 权限校验（2026-11-20 P0）：外部调用必须是候选人本人或管理员；
+  -- 内部可信调用（hb_submit_survey 已核验 token 与身份）带 hb.trusted_candidate 标记放行。
+  -- 标记与 p_candidate_id 必须严格相等，防止借道改写他人。
+  IF coalesce(current_setting('hb.trusted_candidate', true), '') <> p_candidate_id::text
+     AND c.owner_id IS DISTINCT FROM auth.uid()
+     AND NOT hb_is_admin() THEN
+    RAISE EXCEPTION 'no permission to compute this candidate';
+  END IF;
+
+  -- 确认有权限后，才允许绕过协作写保护触发器（服务端可信写路径）
+  PERFORM set_config('hb.internal_write', 'on', true);
+
   v_resume := COALESCE(c.resume_raw, c.score);
   SELECT r.score INTO v_survey FROM hb_survey_responses r
     WHERE r.candidate_id = c.id ORDER BY r.submitted_at DESC LIMIT 1;
@@ -52,3 +64,7 @@ BEGIN
   RETURN jsonb_build_object('candidate_id', c.id, 'composite', v_composite, 'complete', v_complete, 'detail', v_detail, 'version', v_version);
 END;
 $$;
+
+-- P0 收紧：撤掉 PUBLIC/anon 的 EXECUTE，只保留登录用户与内部定义者调用
+REVOKE EXECUTE ON FUNCTION hb_compute_composite(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION hb_compute_composite(bigint) TO authenticated;
